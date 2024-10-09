@@ -4,8 +4,7 @@
 #     N/w architecture: 3 linear layer, all RelU non-linearity except last Sigmoid, Latent space dimn: 9 
 #     Loss: BCE
 #     Dataset: MNIST dataset
-#
-
+#     Analyze Latent space using PCA
 
 import torch
 import torchvision
@@ -17,6 +16,13 @@ import torch.nn.functional as F
 import os
 import random
 from torchvision.utils import save_image
+from sklearn.preprocessing import StandardScaler
+sc = StandardScaler()
+from sklearn.decomposition import PCA
+import matplotlib.cm as cm
+
+no_classes = 10
+colors = cm.rainbow(np.linspace(0, 1, no_classes))
 
 # Reproducibility
 torch.manual_seed(0)
@@ -33,16 +39,16 @@ batch_size = 256
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 # Create a directory if not exists
-sample_dir = './Autoencoder_results/9dimnLatentSpace/BCE_loss'
+sample_dir = './Autoencoder_results_LatentPCA/9dimnLatentSpace/BCE_loss'
 if not os.path.exists(sample_dir):
     os.makedirs(sample_dir)
 
-train_dataset = torchvision.datasets.MNIST(root='data/',
+train_dataset = torchvision.datasets.MNIST(root='../data/',
                                      train=True, 
                                      transform=transforms.ToTensor(),
                                      download=True)
 
-test_dataset = torchvision.datasets.MNIST(root='data/',
+test_dataset = torchvision.datasets.MNIST(root='../data/',
                                      train=False, 
                                      transform=transforms.ToTensor(),
                                      download=True)
@@ -83,11 +89,11 @@ class AutoEncoderNet(nn.Module):
     def forward(self, x):
         x = self.relu1(self.linear1(x))
         x = self.relu2(self.linear2(x))
-        x = self.relu3(self.linear3(x))
-        x = self.relu4(self.linear4(x))
+        e = self.relu3(self.linear3(x))
+        x = self.relu4(self.linear4(e))
         x = self.relu5(self.linear5(x))
         x = self.sigmoid(self.linear6(x))
-        return x
+        return e, x
 
 # Build model.
 model = AutoEncoderNet().to(device)
@@ -125,7 +131,7 @@ for epoch in range(no_epochs):
     # labels = labels.to(device)
 
     # Forward pass.
-    x_reconst = model(images)
+    latent_encoding, x_reconst = model(images)
 
     # breakpoint()
 
@@ -150,6 +156,14 @@ for epoch in range(no_epochs):
     if epoch == 0 and (batch_idx+1) % 10 == 0:
       print(f"Train Batch:{batch_idx}/{no_batches_train}, loss: {loss}, total_loss: {total_loss_train}")
 
+    # Accumulate data for PCA
+    if batch_idx == 0:
+       X_train = latent_encoding.detach().cpu().numpy()
+       X_labels = labels.detach().cpu().numpy()
+    else:
+       X_train = np.concatenate((X_train, latent_encoding.detach().cpu().numpy()), axis=0)
+       X_labels = np.concatenate((X_labels, labels.detach().cpu().numpy()), axis=0)
+
   # Decay learning rate
   if (epoch+1) % 50 == 0:
       curr_lr /= 10
@@ -160,6 +174,7 @@ for epoch in range(no_epochs):
   if (epoch+1) % 10 == 0:
     x_concat = torch.cat([images.view(-1, 1, 28, 28), x_reconst.view(-1, 1, 28, 28)], dim=3)
     save_image(x_concat, os.path.join(sample_dir, 'train_reconst-{}.png'.format(epoch+1)))
+
 
   # Testing after each epoch
   model.eval()
@@ -174,7 +189,7 @@ for epoch in range(no_epochs):
       labels = labels.to(device)
 
       # Forward pass.
-      x_reconst = model(images)
+      _, x_reconst = model(images)
 
       # Compute test loss.
       loss = criterion(x_reconst, images)
@@ -187,6 +202,7 @@ for epoch in range(no_epochs):
     if (epoch+1) % 10 == 0:
       x_concat = torch.cat([images.view(-1, 1, 28, 28), x_reconst.view(-1, 1, 28, 28)], dim=3)
       save_image(x_concat, os.path.join(sample_dir, 'test_reconst-{}.png'.format(epoch+1)))
+
 
   # PLotting train and test curves
   # breakpoint()
@@ -203,5 +219,24 @@ for epoch in range(no_epochs):
   plt.ylabel('Loss')
   plt.show()
   plt.savefig(os.path.join(sample_dir, 'Loss.png'))
+
+  # Plotting latent space using PCA
+  if (epoch) % 5 == 0:
+
+    X_trainT = sc.fit_transform(X_train)
+    # X_test = sc.transform(X_test)
+    pca = PCA(n_components = 2)
+    X_trainPCA = pca.fit_transform(X_trainT)
+    # X_test = pca.transform(X_test)
+    # breakpoint()
+
+    plt.clf()
+    no_points_plt = 10000
+    X = X_trainPCA[0:no_points_plt,0]
+    Y = X_trainPCA[0:no_points_plt,1]
+    plt.scatter(X, Y, color = colors[X_labels[0:no_points_plt]])
+    plt.title('PCA latent space')
+    plt.show()
+    plt.savefig(os.path.join(sample_dir, f'PCA_latentSpace-{epoch}.png'))
 
   model.train()
